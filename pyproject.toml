@@ -1,0 +1,28 @@
+[project]
+name = "iid"
+version = "0.1.0"
+description = "Integrated Information Decomposition in LLM project"
+readme = "README.md"
+requires-python = "==3.12.10"
+
+dependencies = [
+    "transformers",
+    "datasets",
+    "peft",
+    "trl",
+    "pyphi @ git+https://github.com/wmayner/pyphi.git@feature/iit-4.0",
+    "omegaid",
+    "scikit-learn",
+    "tensorboard",
+    "torch-tb-profiler",
+    "bitsandbytes",
+    "deepspeed",
+    "math-verify",
+    "matplotlib",
+    "huggingface-hub",
+    "torch",
+    "trl==1.6.0",
+    "vllm==0.13.0",
+    "jsonlines",
+    "openml",
+]
