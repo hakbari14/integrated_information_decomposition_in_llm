@@ -8,6 +8,16 @@ from sklearn import decomposition
 import torch
 import numpy as np
 import re 
+import gc
+import logging
+import traceback
+
+
+logging.basicConfig(
+    filename="error_logs/training_error.log",
+    level=logging.ERROR,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)        
 
 class grpo_trainer(ABC): 
 
@@ -76,7 +86,7 @@ class grpo_trainer(ABC):
             
             reward: float = 0.0
             try:
-                result: PIDResult = self.calculator.compute(log.time)
+                result: PIDResult = self.calculator.compute(log.timeseries)
                 log.synergy = result.synergy
                 log.redundancy = result.redundancy
                 log.uniqueness = result.uniqueness
@@ -91,7 +101,10 @@ class grpo_trainer(ABC):
                 elif phyid_reward_type_enum.SYNERGY_REDUNDANCY == self.config.reward_type:
                     log.synergy_redundancy_reward = log.synergy - log.redundancy
                     reward = log.synergy_redundancy_reward
+            
             except Exception as e:
+                logging.exception("An exception occurred [calculate_phyid_reward]")                        
+                traceback.print_exc()                        
                 print(f"[Exception] calculate_phyid_reward: {e}")
                 
             rewards.append(reward)
@@ -118,6 +131,7 @@ class grpo_trainer(ABC):
 
         return rewards
 
+    @torch.inference_mode()
     def generate_binary_timeseries(self, log: training_log_entity) -> training_log_entity:
         if log.prompt is None or log.completion is None or len(log.completion) == 0:
             return log
@@ -125,17 +139,22 @@ class grpo_trainer(ABC):
         trainer = self.get_trainer()
         model = trainer.model
         tokenizer = trainer.processing_class
-
+        
+        prompt_embedding = None
+        completion_embedding = None
+        attention_score = None
+        attention_weight = None
+        embedding_for_pca = None
         try:
             refine_prompt = self.clean_prompt_for_phi(log.prompt)
             prompt_embedding = self.extract_representation(refine_prompt, model, tokenizer, self.config.layer_type)
             completion_embedding = self.extract_representation(log.completion, model, tokenizer, self.config.layer_type)
             attention_score = self.attention_score(prompt_embedding, completion_embedding)
             attention_weight = self.attention_weight(attention_score)
-            completion_embedding_for_pca = np.concatenate(tuple(np.matmul(attention_weight, prompt_embedding)), axis=1,)
+            embedding_for_pca = np.concatenate(tuple(np.matmul(attention_weight, prompt_embedding)), axis=1,)
             pca = decomposition.PCA(n_components = self.config.reduced_dimention, random_state = 42)
-            pca.fit(completion_embedding_for_pca)
-            time_series = pca.transform(completion_embedding_for_pca)
+            pca.fit(embedding_for_pca)
+            time_series = pca.transform(embedding_for_pca)
             
             if phyid_threashold_type_enum.AVERAGE == self.config.threashold_type: 
                 avgs = np.mean(time_series, axis=0)
@@ -149,7 +168,13 @@ class grpo_trainer(ABC):
 
             log.time_series = time_series 
         except Exception as e:
+            logging.exception("An exception occurred [generate_binary_timeseries]")                        
+            traceback.print_exc()                        
             print(f"[Exception] generate_binary_timeseries: {e}")
+            
+        finally:
+            del prompt_embedding, completion_embedding, attention_score, attention_weight, embedding_for_pca
+            gc.collect()
 
         return log
         

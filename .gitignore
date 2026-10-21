@@ -3,3 +3,5 @@
 *.pyo
 .vscode/**
 .venv/**
+live_logs/**
+error_logs/**
