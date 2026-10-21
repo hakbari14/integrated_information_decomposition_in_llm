@@ -7,7 +7,7 @@ from src.utils.enums_class import training_type_enum, phyid_layer_type_enum, phy
 from src.training.training_config import training_config
 
 
-class grpo_trainer_settings_0(grpo_trainer): 
+class grpo_trainer_settings_1(grpo_trainer): 
 
     def __init__(self):
         config = training_config(
@@ -81,5 +81,5 @@ class grpo_trainer_settings_0(grpo_trainer):
         return self.logger
 
 
-t = grpo_trainer_settings_0()
+t = grpo_trainer_settings_1()
 t.train()
