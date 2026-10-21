@@ -6,18 +6,18 @@ import pandas as pd
 
 rng = np.random.default_rng(42)
 # 5 components, 10000 observations
-data = rng.standard_normal((5, 10000))
+data = rng.integers(0, 2, size=(5, 10000))
 
 results = []
 
 for i, j in combinations(range(5), 2):
     pair_data = data[[i, j], :]
-
+    
     pair_atoms, _ = calc_phiid_multivariate(
         pair_data,
         pair_data,
         tau=1,
-        kind="gaussian",
+        kind="discrete",
         redundancy="MMI"
     )
 

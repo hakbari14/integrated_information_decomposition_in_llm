@@ -1,0 +1,105 @@
+from src.datasets.dataset_handler import dataset_handler
+from src.datasets.dataset_config import dataset_config
+from datasets import Dataset
+import re
+from datasets import Dataset
+from datasets import load_dataset
+import random 
+
+class mmlu_pro_dataset(dataset_handler): 
+
+    def __init__(self, config: dataset_config):
+        super().__init__(config)
+        
+        self.dataset_id = 'TIGER-Lab/MMLU-Pro'
+        self.dataset: Dataset = load_dataset(self.dataset_id)
+        self.test_dataset: Dataset = self.dataset['test']
+        
+        seed = 42
+        category_list = set(self.test_dataset["category"])
+        selected_indices = []
+        for category in category_list:
+            indices = [
+                i for i, t in enumerate(self.test_dataset["category"])
+                if t == category
+            ]
+
+            if len(indices) <= config.get_max_test_dataset_size_per_category():
+                selected_indices.extend(indices)
+            else:
+                rng = random.Random(seed)
+                selected_indices.extend(
+                    rng.sample(indices, config.get_max_test_dataset_size_per_category())
+                )
+
+        self.test_dataset = self.test_dataset.select(selected_indices)        
+        
+        self.train_dataset = Dataset.from_dict({"prompt": [], "target": [], "problem_id" : []})
+        self.test_dataset = self.test_dataset.add_column('unique_id', range(len(self.test_dataset)))
+
+    
+    def final_answer_extraction(self, prompt, solution, target):
+        return self.multiple_choice_answer(solution, 'ABCDEFGHIJ')
+
+        
+    def generate_model_prompt(self, x):
+        unique_id: str = x['unique_id']
+        question: str = x['question']
+        choices: list[str] = x['options']
+        answer_index = x['answer_index']
+        answer = x['answer']
+        problem_id = x['question_id']
+        prompt, label = self.generate_model_prompt_item(unique_id, problem_id, question, choices, answer_index, answer)
+        
+        r1_prefix = [
+            {"role": "user",
+                "content": prompt
+                },
+        ]
+        
+        return {
+                "prompt": self.tokenizer.apply_chat_template(r1_prefix, tokenize=False, add_generation_prompt=True), 
+                "target": label,
+                "problem_id": problem_id
+                }
+
+    def generate_model_prompt_permutation(self, x, num_choice_permutations: int) -> list[dict]:
+        unique_id: str = x['unique_id']
+        question: str = x['question']
+        choices: list[str] = x['options']
+        answer_index = x['answer_index']
+        answer = x['answer']
+        problem_id = x['question_id']
+
+        prompt_list: list[dict] = [] 
+        result: list[tuple[list[str], int]] = self.permute_options(choices, answer_index, num_choice_permutations)
+        for item in result:
+            permute_choices = item[0]
+            permute_label_index = item[1]
+            prompt, label = self.generate_model_prompt_item(unique_id, problem_id, question, permute_choices, permute_label_index, answer)
+            r1_prefix = [
+                {"role": "user",
+                    "content": prompt
+                    },
+            ]
+            prompt_list.append({
+                    "prompt": self.tokenizer.apply_chat_template(r1_prefix, tokenize=False, continue_final_message=True), 
+                    "target": label,
+                    "problem_id": problem_id
+                    })
+            
+        return prompt_list
+
+    def generate_model_prompt_item(self, unique_id: str, problem_id: str, question: str, choices: list[str], answer_index: int, answer: str) -> str:
+        answer_options: list[str] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
+        prompt = f'Question: {question}\n\n'
+        prompt += 'Options:\n'
+        for idx, choice in enumerate(choices):
+            prompt += f'{answer_options[idx]}. {choice}\n'
+        prompt += 'Reason step by step and then choose the most truthful answer.\n'
+        prompt += f'End your response with "Answer: X", where X is one letter ({answer_options[0]} to {answer_options[len(choices) - 1]}).'
+        return prompt, answer_options[answer_index]         
+
+    def generate_wrong_answer(self, latex_expr:str) -> str:
+        return None
+

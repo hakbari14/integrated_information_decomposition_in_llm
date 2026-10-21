@@ -11,6 +11,7 @@ dependencies = [
     "peft",
     "trl",
     "pyphi @ git+https://github.com/wmayner/pyphi.git@feature/iit-4.0",
+    "dit",
     "omegaid",
     "scikit-learn",
     "tensorboard",
