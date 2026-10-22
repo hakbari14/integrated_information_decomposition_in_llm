@@ -1,7 +1,7 @@
 from src.training.grpo_trainer import grpo_trainer
 from src.logger.training.training_logger import training_logger
 from trl import GRPOConfig, ModelConfig
-from datasets.math.open_thoughts.open_thoughts_dataset import open_thoughts_dataset
+from src.datasets.math.open_thoughts.open_thoughts_dataset import open_thoughts_dataset
 from src.datasets.dataset_config import dataset_config
 from src.utils.enums_class import training_type_enum, phyid_layer_type_enum, phyid_threashold_type_enum, phyid_reward_type_enum
 from src.training.training_config import training_config
