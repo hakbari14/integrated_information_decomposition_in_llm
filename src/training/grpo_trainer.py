@@ -166,7 +166,7 @@ class grpo_trainer(ABC):
                 time_series[np.where(time_series_copy[:, i] >= avgs[i]), i] = 1
                 time_series[np.where(time_series_copy[:, i] < avgs[i]), i] = 0
 
-            log.time_series = time_series 
+            log.timeseries = time_series 
         except Exception as e:
             logging.exception("An exception occurred [generate_binary_timeseries]")                        
             traceback.print_exc()                        
