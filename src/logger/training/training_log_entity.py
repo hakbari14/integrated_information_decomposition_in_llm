@@ -8,6 +8,7 @@ class training_log_entity(log_entity):
 
     trainer_global_step : Optional[str] = None
     completion : Optional[str] = None
+    completion_shape : Optional[str] = None
     token_count : Optional[int] = None
     final_answer : Optional[str] = None
     compared_final_answer : Optional[str] = None

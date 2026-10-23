@@ -58,7 +58,7 @@ class PIDCalculator:
 
         return "mixed"
 
-    def compute(self, data: BinaryArray) -> PIDResult:
+    def compute(self, data: np.ndarray) -> PIDResult:
         data = np.asarray(data)
 
         if data.ndim != 2:
@@ -136,27 +136,27 @@ class PIDCalculator:
         )
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
-    rng = np.random.default_rng(42)
-    T: int = 10000
-    N: int = 3
-    data: BinaryArray = rng.integers(low=0, high=2, size=(T, N))
+#     rng = np.random.default_rng(42)
+#     T: int = 10000
+#     N: int = 3
+#     data: BinaryArray = rng.integers(low=0, high=2, size=(T, N))
 
-    calculator = PIDCalculator(max_sources=5)
-    result: PIDResult = calculator.compute(data)
+#     calculator = PIDCalculator(max_sources=5)
+#     result: PIDResult = calculator.compute(data)
 
-    print(f"Synergy Ratio:    {result.synergy:.6f}")
-    print(f"Redundancy Ratio: {result.redundancy:.6f}")
-    print(f"Uniqueness Ratio: {result.uniqueness:.6f}")
-    print(f"Mixed Ratio:      {result.mixed:.6f}")
-    print(f"Total MI:         {result.total_mi:.6f} bits")
+#     print(f"Synergy Ratio:    {result.synergy:.6f}")
+#     print(f"Redundancy Ratio: {result.redundancy:.6f}")
+#     print(f"Uniqueness Ratio: {result.uniqueness:.6f}")
+#     print(f"Mixed Ratio:      {result.mixed:.6f}")
+#     print(f"Total MI:         {result.total_mi:.6f} bits")
 
-    ratio_sum: float = (
-        result.synergy
-        + result.redundancy
-        + result.uniqueness
-        + result.mixed
-    )
+#     ratio_sum: float = (
+#         result.synergy
+#         + result.redundancy
+#         + result.uniqueness
+#         + result.mixed
+#     )
 
-    print(f"Sum of Ratios:    {ratio_sum:.6f}")
+#     print(f"Sum of Ratios:    {ratio_sum:.6f}")

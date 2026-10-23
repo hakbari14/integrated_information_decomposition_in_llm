@@ -15,8 +15,8 @@ class grpo_trainer_settings_1(grpo_trainer):
             training_type = training_type_enum.ACCURACY_REWARD_PHY_ID, 
             layer_type = phyid_layer_type_enum.SOME,
             threashold_type = phyid_threashold_type_enum.AVERAGE,
-            reward_type = phyid_reward_type_enum.SYNERGY,
-            reduced_dimention = 4,
+            reward_type = phyid_reward_type_enum.REDUNDANCY,
+            reduced_dimention = 3,
         )
         
         super().__init__(config)
