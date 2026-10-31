@@ -1,16 +1,12 @@
-from src.calculator.PIDCalculator import PIDCalculator, PIDResult
 from src.logger.training.training_log_entity import training_log_entity
-from src.utils.enums_class import training_type_enum, phyid_layer_type_enum, phyid_threashold_type_enum, phyid_reward_type_enum
+from src.utils.enums_class import training_type_enum, phyid_layer_type_enum
 from src.training.training_config import training_config
 from trl import GRPOTrainer, get_peft_config
 from abc import ABC, abstractmethod
-from sklearn import decomposition
 import torch
 import numpy as np
 import re 
-import gc
 import logging
-import traceback
 
 
 logging.basicConfig(
@@ -28,7 +24,6 @@ class grpo_trainer(ABC):
         self.training_args = None
         self.trainer = None
         self.logger = None
-        self.calculator = PIDCalculator()
 
     def train(self):
         trainer = self.get_trainer()
@@ -52,66 +47,6 @@ class grpo_trainer(ABC):
             self.trainer.model.print_trainable_parameters()
         return self.trainer
 
-    def get_reward_funcs(self):
-        if training_type_enum.ACCURACY_REWARD == self.config.training_type: 
-            return [self.accuracy_reward]
-
-        if training_type_enum.ACCURACY_REWARD_PHY_ID  == self.config.training_type: 
-            return [self.accuracy_reward, self.calculate_phyid_reward]
-
-        return []
-
-    @torch.inference_mode()
-    def calculate_phyid_reward(self, completions, target=None, tokenizer=None, **kwargs):
-        split_list = kwargs.get("split")     
-        sample_ids = kwargs.get("sample_id") 
-        problem_ids = kwargs.get("problem_id", None)
-        prompts = kwargs.get("prompts") or kwargs.get("prompt") or kwargs.get("inputs")
-        questions = kwargs.get("question")     
-        trainer_state = kwargs.get("trainer_state", None)
-        trainer_global_step = trainer_state.global_step
-        
-        log_list: list[training_log_entity] = self.get_log_list(trainer_global_step, split_list, sample_ids, problem_ids, questions, prompts, completions, target)
-    
-        rewards = []
-        for log in log_list:
-            if log.completion is None: 
-                rewards.append(0.0)
-                continue
-
-            log = self.generate_binary_timeseries(log)
-            if log.timeseries is None:
-                rewards.append(0.0)
-                continue
-            
-            reward: float = 0.0
-            try:
-                result: PIDResult = self.calculator.compute(log.timeseries)
-                log.synergy = result.synergy
-                log.redundancy = result.redundancy
-                log.uniqueness = result.uniqueness
-                log.mixed = result.mixed
-                
-                if phyid_reward_type_enum.SYNERGY == self.config.reward_type: 
-                    log.synergy_reward = log.synergy
-                    reward = log.synergy_reward
-                elif phyid_reward_type_enum.REDUNDANCY == self.config.reward_type:
-                    log.redundancy_reward = 1.0 - log.redundancy
-                    reward = log.redundancy_reward
-                elif phyid_reward_type_enum.SYNERGY_REDUNDANCY == self.config.reward_type:
-                    log.synergy_redundancy_reward = log.synergy - log.redundancy
-                    reward = log.synergy_redundancy_reward
-            
-            except Exception as e:
-                logging.exception("An exception occurred [calculate_phyid_reward]")                        
-                traceback.print_exc()                        
-                print(f"[Exception] calculate_phyid_reward: {e}")
-                
-            rewards.append(reward)
-        
-        self.get_logger().write_to_log_file()
-        return rewards
-
     def accuracy_reward(self, completions, target, **kwargs):
         rewards = []
         split_list = kwargs.get("split")     
@@ -131,54 +66,6 @@ class grpo_trainer(ABC):
 
         return rewards
 
-    @torch.inference_mode()
-    def generate_binary_timeseries(self, log: training_log_entity) -> training_log_entity:
-        if log.prompt is None or log.completion is None or len(log.completion) == 0:
-            return log
-        
-        trainer = self.get_trainer()
-        model = trainer.model
-        tokenizer = trainer.processing_class
-        
-        prompt_embedding = None
-        completion_embedding = None
-        attention_score = None
-        attention_weight = None
-        embedding_for_pca = None
-        try:
-            refine_prompt = self.clean_prompt_for_phi(log.prompt)
-            prompt_embedding = self.extract_representation(refine_prompt, model, tokenizer, self.config.layer_type)
-            completion_embedding = self.extract_representation(log.completion, model, tokenizer, self.config.layer_type)
-            attention_score = self.attention_score(prompt_embedding, completion_embedding)
-            attention_weight = self.attention_weight(attention_score)
-            embedding_for_pca = np.concatenate(tuple(np.matmul(attention_weight, prompt_embedding)), axis=1,)
-            pca = decomposition.PCA(n_components = self.config.reduced_dimention, random_state = 42)
-            pca.fit(embedding_for_pca)
-            time_series = pca.transform(embedding_for_pca)
-            
-            if phyid_threashold_type_enum.AVERAGE == self.config.threashold_type: 
-                avgs = np.mean(time_series, axis=0)
-            elif phyid_threashold_type_enum.MEDIAN == self.config.threashold_type: 
-                avgs = np.median(time_series, axis=0)
-            
-            time_series_copy = np.copy(time_series)
-            for i in range(len(avgs)):
-                time_series[np.where(time_series_copy[:, i] >= avgs[i]), i] = 1
-                time_series[np.where(time_series_copy[:, i] < avgs[i]), i] = 0
-
-            log.timeseries = time_series 
-            log.completion_shape = time_series.shape
-        except Exception as e:
-            logging.exception("An exception occurred [generate_binary_timeseries]")                        
-            traceback.print_exc()                        
-            print(f"[Exception] generate_binary_timeseries: {e}")
-            
-        finally:
-            del prompt_embedding, completion_embedding, attention_score, attention_weight, embedding_for_pca
-            gc.collect()
-
-        return log
-        
     def get_log_list(self, trainer_global_step, split_list, sample_ids, problem_ids, questions, prompts, completions, target) -> list[training_log_entity]:
         log_list = self.get_logger().get_log_list(trainer_global_step)
         
@@ -213,10 +100,11 @@ class grpo_trainer(ABC):
 
                 log.final_answer = answer
                 log.compared_final_answer = compared_final_answer
-                log.accuracy_reward = self.config.acurray_reward_coefficient * acc_reward
-            except Exception:
+                log.accuracy_reward = acc_reward
+            except Exception as e:
                 log.accuracy = False
                 log.accuracy_reward = 0.0
+                print(f"Exception message: {e}")
             
             log_list.append(log)
             self.get_logger().add_to_buffer(log)
@@ -250,10 +138,6 @@ class grpo_trainer(ABC):
                     outputs.hidden_states[i].detach().cpu().float().numpy()
                     for i in layer_indices
                 ], axis=0)
-                
-                # Convert one token's logits at a time, avoiding a full FP32 copy.
-                if layer_type == phyid_layer_type_enum.LAST:
-                    hidden = hidden[0].copy()
                     
                 return hidden
         finally:
@@ -319,6 +203,10 @@ class grpo_trainer(ABC):
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
 
         return text.strip()
+
+    @abstractmethod
+    def get_reward_funcs(self):
+        pass
 
     @abstractmethod
     def get_dataset(self):

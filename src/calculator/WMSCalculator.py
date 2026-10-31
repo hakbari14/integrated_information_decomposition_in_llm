@@ -1,15 +1,10 @@
-
+import os
 import time
 import numpy as np
-import os
 
-from collections import Counter
-from concurrent.futures import (
-    ProcessPoolExecutor,
-    as_completed,
-)
-from multiprocessing import shared_memory
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from numba import njit
 from tqdm.auto import tqdm
 
 
@@ -21,91 +16,182 @@ class WMSResult:
     wms: float
 
 
-def mutual_information(
-    x: np.ndarray,
-    y: np.ndarray
-) -> float:
+# =====================================================
+# Numba: Entropy from sorted integer labels
+# =====================================================
+
+@njit(nogil=True)
+def _entropy_sorted(labels):
+    n = len(labels)
+
+    if n == 0:
+        return 0.0
+
+    entropy = 0.0
+    count = 1
+
+    for i in range(1, n):
+        if labels[i] == labels[i - 1]:
+            count += 1
+        else:
+            p = count / n
+            entropy -= p * np.log2(p)
+            count = 1
+
+    p = count / n
+    entropy -= p * np.log2(p)
+
+    return entropy
+
+
+# =====================================================
+# Numba: MI between binary source and categorical target
+# =====================================================
+
+@njit(nogil=True)
+def _binary_source_mi(x, y_labels, num_y_states):
     """
-    Empirical discrete mutual information in bits.
+    Exact empirical MI between a binary variable X
+    and a categorical target Y.
+
+    x: (num_samples,) binary uint8
+    y_labels: (num_samples,) integer state IDs
     """
-    x = np.asarray(x)
-    y = np.asarray(y)
-
-    if x.ndim == 1:
-        x = x[:, None]
-
-    if y.ndim == 1:
-        y = y[:, None]
-
-    if len(x) != len(y):
-        raise ValueError("Sample counts must match.")
 
     n = len(x)
 
     if n == 0:
-        raise ValueError("Empty input.")
+        return 0.0
 
-    x_states = [tuple(row) for row in x]
-    y_states = [tuple(row) for row in y]
+    counts = np.zeros((2, num_y_states), dtype=np.int64)
 
-    count_x = Counter(x_states)
-    count_y = Counter(y_states)
-    count_xy = Counter(zip(x_states, y_states))
+    for t in range(n):
+        counts[x[t], y_labels[t]] += 1
+
+    count_x = np.zeros(2, dtype=np.int64)
+    count_y = np.zeros(num_y_states, dtype=np.int64)
+
+    for a in range(2):
+        for b in range(num_y_states):
+            count_x[a] += counts[a, b]
+            count_y[b] += counts[a, b]
 
     mi = 0.0
 
-    for (sx, sy), count in count_xy.items():
-        pxy = count / n
-        px = count_x[sx] / n
-        py = count_y[sy] / n
+    for a in range(2):
+        for b in range(num_y_states):
+            c = counts[a, b]
 
-        mi += pxy * np.log2(pxy / (px * py))
+            if c > 0:
+                mi += (
+                    (c / n)
+                    * np.log2(
+                        (c * n) /
+                        (count_x[a] * count_y[b])
+                    )
+                )
 
-    return max(0.0, float(mi))
+    return max(0.0, mi)
 
 
-def _compute_individual_mi(args):
+# =====================================================
+# Numba: MI from precomputed categorical labels
+# =====================================================
+
+@njit(nogil=True)
+def _categorical_mi(x_labels, y_labels):
     """
-    Worker executed in a separate process.
+    Empirical MI using:
+    I(X;Y) = H(X) + H(Y) - H(X,Y)
     """
-    i, shm_name, shape, dtype_str = args
 
-    shm = shared_memory.SharedMemory(name=shm_name)
+    n = len(x_labels)
 
-    try:
-        data = np.ndarray(
-            shape,
-            dtype=np.dtype(dtype_str),
-            buffer=shm.buf
-        )
+    x_sorted = np.sort(x_labels.copy())
+    y_sorted = np.sort(y_labels.copy())
 
-        x_i = data[:-1, i]
-        y = data[1:]
+    hx = _entropy_sorted(x_sorted)
+    hy = _entropy_sorted(y_sorted)
 
-        mi = mutual_information(x_i, y)
+    # Count joint states by sorting lexicographically.
+    # np.lexsort support may vary across Numba versions,
+    # so use an integer pair encoding.
+    num_y = np.max(y_labels) + 1
 
-        return i, mi
+    joint = (
+        x_labels.astype(np.int64) * num_y
+        + y_labels.astype(np.int64)
+    )
 
-    finally:
-        shm.close()
+    joint_sorted = np.sort(joint)
 
+    hxy = _entropy_sorted(joint_sorted)
+
+    return max(0.0, hx + hy - hxy)
+
+
+# =====================================================
+# Convert binary rows to categorical state IDs
+# =====================================================
+
+def binary_rows_to_labels(data: np.ndarray) -> np.ndarray:
+    """
+    Assign a unique integer ID to each observed binary row.
+    No exponential state-space allocation.
+    """
+
+    data = np.ascontiguousarray(data, dtype=np.uint8)
+
+    packed = np.packbits(data, axis=1)
+
+    row_dtype = np.dtype(
+        (np.void, packed.shape[1])
+    )
+
+    packed_rows = packed.view(row_dtype).ravel()
+
+    _, inverse = np.unique(
+        packed_rows,
+        return_inverse=True
+    )
+
+    return inverse.astype(np.int64)
+
+
+# =====================================================
+# Thread worker
+# =====================================================
+
+def _compute_individual_mi(
+    i: int,
+    data: np.ndarray,
+    y_labels: np.ndarray,
+    num_y_states: int
+):
+    x_i = np.ascontiguousarray(data[:-1, i])
+
+    mi = _binary_source_mi(
+        x_i,
+        y_labels,
+        num_y_states
+    )
+
+    return i, float(mi)
+
+
+# =====================================================
+# WMS Calculator
+# =====================================================
 
 class WMSCalculator:
+
     def __init__(
         self,
         T: int | None = None,
         eps: float = 1e-12,
         show_progress: bool = True
     ):
-        """
-        T: Requested number of processes.
-           None -> use half of available CPUs.
 
-        eps: Numerical tolerance.
-        show_progress: Enable progress bar.
-        """
-
-        # Number of logical CPUs available to this process
         if hasattr(os, "process_cpu_count"):
             cpu_count = os.process_cpu_count()
         elif hasattr(os, "sched_getaffinity"):
@@ -115,21 +201,23 @@ class WMSCalculator:
 
         cpu_count = cpu_count or 1
 
-        # Maximum: half of available logical CPUs
-        max_processes = max(1, cpu_count // 2)
+        max_threads = max(1, cpu_count // 2)
 
         if T is not None and T < 1:
             raise ValueError("T must be >= 1.")
 
-        self.T = min(T, max_processes) if T is not None else max_processes
+        self.T = (
+            min(T, max_threads)
+            if T is not None
+            else max_threads
+        )
 
         self.eps = eps
         self.show_progress = show_progress
 
         print(f"Available logical CPUs: {cpu_count}")
-        print(f"Maximum allowed processes: {max_processes}")
-        print(f"Selected processes: {self.T}")
-
+        print(f"Maximum allowed threads: {max_threads}")
+        print(f"Selected threads: {self.T}")
 
     def calculate(
         self,
@@ -153,97 +241,90 @@ class WMSCalculator:
                 "data must contain only 0 and 1."
             )
 
-        data = np.ascontiguousarray(data)
+        data = np.ascontiguousarray(
+            data,
+            dtype=np.uint8
+        )
 
         num_samples, N = data.shape
 
         # =====================================
-        # Step 1: Joint Mutual Information
+        # Step 1: Encode observed states
         # =====================================
 
         if self.show_progress:
-            print("Computing joint mutual information...")
+            print("Encoding binary states...")
 
-        A = mutual_information(
-            data[:-1],
+        x_labels = binary_rows_to_labels(
+            data[:-1]
+        )
+
+        y_labels = binary_rows_to_labels(
             data[1:]
         )
 
-        # =====================================
-        # Step 2: Shared Memory
-        # =====================================
-
-        shm = shared_memory.SharedMemory(
-            create=True,
-            size=data.nbytes
+        num_y_states = int(
+            np.max(y_labels) + 1
         )
 
-        try:
-            shared_data = np.ndarray(
-                data.shape,
-                dtype=data.dtype,
-                buffer=shm.buf
-            )
+        # =====================================
+        # Step 2: Joint MI
+        # =====================================
 
-            shared_data[:] = data
+        if self.show_progress:
+            print("Computing joint MI...")
 
-            worker_args = [
-                (
+        A = _categorical_mi(
+            x_labels,
+            y_labels
+        )
+
+        # =====================================
+        # Step 3: Individual MI in threads
+        # =====================================
+
+        individual_mis = np.zeros(
+            N,
+            dtype=np.float64
+        )
+
+        with ThreadPoolExecutor(
+            max_workers=min(self.T, N)
+        ) as executor:
+
+            futures = [
+                executor.submit(
+                    _compute_individual_mi,
                     i,
-                    shm.name,
-                    data.shape,
-                    data.dtype.str
+                    data,
+                    y_labels,
+                    num_y_states
                 )
                 for i in range(N)
             ]
 
-            individual_mis = np.zeros(
-                N,
-                dtype=np.float64
-            )
+            with tqdm(
+                total=N,
+                desc="Computing Individual MI",
+                unit="dimension",
+                disable=not self.show_progress
+            ) as pbar:
 
-            # =====================================
-            # Step 3: Parallel MI Computation
-            # =====================================
+                for future in as_completed(futures):
 
-            with ProcessPoolExecutor(
-                max_workers=min(self.T, N)
-            ) as executor:
+                    i, mi = future.result()
 
-                futures = [
-                    executor.submit(
-                        _compute_individual_mi,
-                        args
-                    )
-                    for args in worker_args
-                ]
+                    individual_mis[i] = mi
 
-                with tqdm(
-                    total=N,
-                    desc="Computing Individual MI",
-                    unit="dimension",
-                    disable=not self.show_progress
-                ) as pbar:
+                    pbar.update(1)
 
-                    for future in as_completed(futures):
-
-                        i, mi = future.result()
-
-                        individual_mis[i] = mi
-
-                        pbar.update(1)
-
-            B = float(np.sum(individual_mis))
-
-        finally:
-            shm.close()
-            shm.unlink()
+        B = float(np.sum(individual_mis))
 
         # =====================================
-        # Step 4: WMS Reward
+        # Step 4: WMS and reward
         # =====================================
 
-        wms = A - B
+        wms = float(A - B)
 
         reward = (
             A / (A + B)
@@ -254,14 +335,14 @@ class WMSCalculator:
         return WMSResult(
             reward=float(reward),
             joint_mi=float(A),
-            individual_mi_sum=float(B),
-            wms=float(wms)
+            individual_mi_sum=B,
+            wms=wms
         )
 
 
-# ==========================================
-# Example Usage
-# ==========================================
+# =====================================================
+# Example
+# =====================================================
 
 if __name__ == "__main__":
 
@@ -269,25 +350,28 @@ if __name__ == "__main__":
 
     num_samples = 10000
     N = 4096
-    T = 100  # Number of parallel processes
+    T = 16
 
     data = rng.integers(
-        0, 2,
+        0,
+        2,
         size=(num_samples, N),
         dtype=np.uint8
     )
 
     calculator = WMSCalculator(
-        T=None,
+        T=T,
         show_progress=True
     )
 
     start = time.perf_counter()
+
     result = calculator.calculate(data)
+
     elapsed = time.perf_counter() - start
 
     print("\n========== WMS RESULTS ==========")
-    print(f"Processes:     {T}")
+    print(f"Threads:       {calculator.T}")
     print(f"Joint MI:      {result.joint_mi:.6f} bits")
     print(f"Individual MI: {result.individual_mi_sum:.6f} bits")
     print(f"WMS:           {result.wms:.6f} bits")

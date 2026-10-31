@@ -19,7 +19,8 @@ class phyid_threashold_type_enum(StrEnum):
 
 class training_type_enum(StrEnum):
     ACCURACY_REWARD = 'accuracy_reward'
-    ACCURACY_REWARD_PHY_ID = 'accuracy_reward_phy_id'
+    INFORMATION_DECOMPOSITION = 'information_decomposition'
+    INFORMATION_DECOMPOSITION_ACCURACY_REWARD = 'information_decomposition_accuracy_reward'
 
 class phyid_reward_type_enum(StrEnum):
     SYNERGY = 'synergy'

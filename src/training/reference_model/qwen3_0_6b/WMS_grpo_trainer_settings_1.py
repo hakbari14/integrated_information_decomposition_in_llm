@@ -1,31 +1,29 @@
-from src.training.grpo_trainer import grpo_trainer
-from src.logger.training.training_logger import training_logger
+from src.training.WMS_grpo_trainer import WMS_grpo_trainer
+from src.logger.training.WMS_training_logger import WMS_training_logger
 from trl import GRPOConfig, ModelConfig
-from src.datasets.math.open_thoughts.open_thoughts_dataset import open_thoughts_dataset
+from src.datasets.math.gsm8k.gsm8k_dataset import gsm8k_dataset
 from src.datasets.dataset_config import dataset_config
-from src.utils.enums_class import training_type_enum, phyid_layer_type_enum, phyid_threashold_type_enum, phyid_reward_type_enum
+from src.utils.enums_class import training_type_enum, phyid_layer_type_enum, phyid_threashold_type_enum
 from src.training.training_config import training_config
 
 
-class grpo_trainer_settings_1(grpo_trainer): 
+class WMS_grpo_trainer_settings_1(WMS_grpo_trainer): 
 
     def __init__(self):
         config = training_config(
-            model_name="Qwen/Qwen3-8B",
-            training_type = training_type_enum.ACCURACY_REWARD_PHY_ID, 
-            layer_type = phyid_layer_type_enum.SOME,
+            model_name="Qwen/Qwen3-0.6B",
+            training_type = training_type_enum.INFORMATION_DECOMPOSITION_ACCURACY_REWARD, 
+            layer_type = phyid_layer_type_enum.LAST,
             threashold_type = phyid_threashold_type_enum.AVERAGE,
-            reward_type = phyid_reward_type_enum.REDUNDANCY,
-            reduced_dimention = 3,
         )
         
         super().__init__(config)
 
-    def get_dataset(self) -> open_thoughts_dataset:
+    def get_dataset(self) -> gsm8k_dataset:
         if self.dataset is None:
             config = dataset_config(self.config.model_name)
-            config.set_max_test_dataset_size(160)
-            self.dataset = open_thoughts_dataset(config)
+            config.set_max_test_dataset_size(100)
+            self.dataset = gsm8k_dataset(config)
         return self.dataset
 
     def get_model_config(self):
@@ -34,8 +32,8 @@ class grpo_trainer_settings_1(grpo_trainer):
                 model_name_or_path = self.config.model_name,
                 attn_implementation="flash_attention_2",
                 use_peft=True,
-                lora_r=2048,
-                lora_alpha=1024,
+                lora_r=512,
+                lora_alpha=512,
                 load_in_4bit=True,
             )
         return self.model_config
@@ -49,19 +47,15 @@ class grpo_trainer_settings_1(grpo_trainer):
                 lr_scheduler_type="cosine",
                 logging_steps=10,
                 max_steps=1200,
-                per_device_train_batch_size=2,      
-                per_device_eval_batch_size=4,
-                gradient_accumulation_steps=2,
+                per_device_train_batch_size=4,      
+                gradient_accumulation_steps=4,
+                num_generations=2,                      
+                per_device_eval_batch_size=16,
+                num_generations_eval=1,                      
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs={"use_reentrant": False},
                 bf16=True,
-                use_vllm=True,
-                vllm_mode="server",
-                vllm_server_host="localhost",
-                vllm_server_port=8000,                
-                max_completion_length=5000, 
-                num_generations=2,                      
-                num_generations_eval=1,                      
+                max_completion_length=1024, 
                 beta=0.001,
                 warmup_ratio=0.0,
 
@@ -76,10 +70,10 @@ class grpo_trainer_settings_1(grpo_trainer):
     
     def get_logger(self):
         if self.logger is None:
-            self.logger = training_logger(log_file_name = 'live_logs/settings_1/settings_1.csv')
+            self.logger = WMS_training_logger(log_file_name = 'live_logs/settings_1/settings_1.csv')
 
         return self.logger
 
 
-t = grpo_trainer_settings_1()
+t = WMS_grpo_trainer_settings_1()
 t.train()
