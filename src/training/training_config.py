@@ -8,9 +8,9 @@ class training_config:
     model_name: str
     
     training_type: training_type_enum 
-    layer_type: phyid_layer_type_enum 
-    threashold_type: phyid_threashold_type_enum 
 
+    layer_type: Optional[phyid_layer_type_enum] = None
+    threashold_type: Optional[phyid_threashold_type_enum] = None
     reduced_dimention: Optional[int] = None
     reward_type: Optional[phyid_reward_type_enum] = None
     
