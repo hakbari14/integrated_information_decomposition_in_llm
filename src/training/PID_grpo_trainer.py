@@ -67,7 +67,7 @@ class PID_grpo_trainer(grpo_trainer):
                     log.redundancy_reward = 1.0 - log.redundancy
                     reward = log.redundancy_reward
                 elif phyid_reward_type_enum.SYNERGY_REDUNDANCY == self.config.reward_type:
-                    log.synergy_redundancy_reward = log.synergy - log.redundancy
+                    log.synergy_redundancy_reward = 0.5 + (log.synergy - log.redundancy) / 2.0
                     reward = log.synergy_redundancy_reward
             
             except Exception as e:
